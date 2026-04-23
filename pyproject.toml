@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "survival_trees"
-version = "0.0.10"
+version = "0.1.0"
 description = "Python survival trees (LTRC tree + forest) with Rust backend"
 readme = "README.md"
 license = { text = "BSD-3-Clause" }
@@ -17,11 +17,8 @@ dependencies = [
     "pandas",
     "scikit-learn",
     "lifelines",
-    "rpy2",
-    "memory_profiler",
-    "pyqt5",
-    "plotly==5.10",
 ]
+
 classifiers = [
     "License :: OSI Approved :: BSD License",
     "Programming Language :: Python :: 3",
@@ -29,14 +26,19 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 
+[project.optional-dependencies]
+viz = ["plotly>=5.10"]
+bench = ["memory_profiler"]
+dev = ["pytest", "survival_trees[viz,bench]"]
+
 [project.urls]
 Homepage = "https://github.com/eurobios-scb/survival-trees"
 
 [tool.maturin]
-manifest-path = "rust/survival_trees_rs/Cargo.toml"
-python-source = "."
+manifest-path = "src/rust/survival_trees_rs/Cargo.toml"
+python-source = "src"
 module-name = "survival_trees._rust"
 features = ["pyo3/extension-module", "pyo3/abi3-py39"]
-include = [
-    "survival_trees/*.R",
-]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

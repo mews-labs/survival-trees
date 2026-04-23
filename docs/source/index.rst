@@ -7,11 +7,6 @@
 .. mdinclude:: ../../README.md
 
 
-Requirements
-------------
-
-.. include:: ../../requirements.txt
-
 .. toctree::
    :maxdepth: 2
    :caption: Contents:

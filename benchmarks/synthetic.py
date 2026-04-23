@@ -4,16 +4,12 @@ from scipy import stats
 
 n = 400
 p = 30
-beta = np.random.uniform(size=p).reshape(-1, 1)
 beta = np.linspace(0, 0.1, num=p)
-# beta[: (3 * p) // 4] = 0
 alpha = 1.79
 weibull = stats.weibull_min(alpha)
 
 
 # https://onlinelibrary.wiley.com/doi/full/10.1002/sim.9136
-
-
 def generating_data(n, p):
     pi_k = np.random.uniform(0.2, 0.8, size=p)
     mu_k = stats.norm.ppf(pi_k)
@@ -22,8 +18,7 @@ def generating_data(n, p):
     d = s.diagonal()
     sigma = s / (np.sqrt(d).reshape(-1, 1) * np.sqrt(d).reshape(1, -1))
     mg = stats.multivariate_normal(mu_k, sigma, allow_singular=True)
-    x_tilde = mg.rvs(size=n)  # > 0
-    return x_tilde
+    return mg.rvs(size=n)  # > 0
 
 
 def get_shape(X, alpha, beta):
@@ -55,7 +50,6 @@ X = generating_data(10 * n, p)
 T = generate_time_of_event(X, alpha, beta)
 R = generate_time_censoring(X, alpha, beta)
 L = generate_left_truncation(X, alpha, beta)
-# L = 0 * np.ones(L.shape)
 Y = T <= R
 print("Proportion of censored event", 1 - np.mean(Y))
 
@@ -64,7 +58,9 @@ R = np.where(Y, T, R)
 
 loc = (R - L) > 1e-6
 print("Average truncated subjects", 1 - np.mean(loc))
-X = pd.DataFrame(X, columns=[f"feature_{i}" for i in range(X.shape[1])]).loc[loc].iloc[:n]
+X = pd.DataFrame(
+    X, columns=[f"feature_{i}" for i in range(X.shape[1])]
+).loc[loc].iloc[:n]
 
 Y = pd.Series(Y, name="target").loc[loc].iloc[:n]
 L = pd.Series(L, name="left_truncation").loc[loc].iloc[:n]
@@ -79,10 +75,11 @@ def plot_corr_x():
 if __name__ == '__main__':
     import matplotlib.pyplot as plot
     import seaborn as sns
-    from survival_trees import RandomForestLTRCFitter, LTRCTreesFitter
-    from survival_trees.metric import concordance_index
     from lifelines.fitters import coxph_fitter, log_logistic_aft_fitter
     from sklearn.model_selection import train_test_split
+
+    from survival_trees import LTRCTreesFitter, RandomForestLTRCFitter
+    from survival_trees.metric import concordance_index
 
     fig, ax = plot.subplots()
     m = get_shape(X, alpha, beta)
@@ -105,7 +102,8 @@ if __name__ == '__main__':
             max_samples=0.8),
         "ltrc_trees": LTRCTreesFitter(),
         "cox-semi-parametric": coxph_fitter.SemiParametricPHFitter(),
-        "aft-log-logistic": log_logistic_aft_fitter.LogLogisticAFTFitter(penalizer=0.01),
+        "aft-log-logistic": log_logistic_aft_fitter.LogLogisticAFTFitter(
+            penalizer=0.01),
     }
     data = pd.concat((X, Y, L,
                       R), axis=1).astype(float)

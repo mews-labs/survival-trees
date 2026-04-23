@@ -58,7 +58,34 @@ auc_cd = time_dependent_auc(
 
 ## Benchmark
 
-![benchmark](public/benchmark.png)
+
+
+<!-- BENCH:START -->
+<!-- auto-generated from ./public/benchmark_cindex.md + ./public/benchmark.md by benchmark.py -->
+
+### Harrell c-index (mean ± std over 5 seeds)
+
+| dataset | ltrc-forest | cox-semi-parametric | aft-log-logistic |
+|---|---|---|---|
+| Larynx Cancer | **0.82** ± 0.03 | 0.65 ± 0.05 | 0.11 ± 0.03 |
+| Lung Cancer | **0.88** ± 0.03 | 0.57 ± 0.06 | 0.50 ± 0.00 |
+| Breast Cancer | 0.86 ± 0.01 | **0.96** ± 0.01 | 0.08 ± 0.01 |
+| Dictatorship & Democracy | **0.60** ± 0.01 | 0.54 ± 0.02 | 0.53 ± 0.02 |
+| Convicts | 0.60 ± 0.05 | 0.60 ± 0.09 | **0.60** ± 0.10 |
+| Synthetic data | **0.64** ± 0.03 | 0.54 ± 0.03 | 0.53 ± 0.03 |
+
+### Time-dependent AUC (Harrell, mean ± std over 5 seeds)
+
+| dataset | ltrc-forest | cox-semi-parametric | aft-log-logistic |
+|---|---|---|---|
+| Larynx Cancer | 0.44 ± 0.04 | **0.60** ± 0.08 | 0.50 ± 0.00 |
+| Lung Cancer | 0.43 ± 0.07 | **0.61** ± 0.04 | 0.50 ± 0.00 |
+| Breast Cancer | **0.55** ± 0.03 | 0.51 ± 0.03 | 0.50 ± 0.00 |
+| Dictatorship & Democracy | **0.75** ± 0.02 | 0.54 ± 0.06 | 0.59 ± 0.04 |
+| Convicts | 0.62 ± 0.05 | **0.65** ± 0.02 | 0.65 ± 0.02 |
+| Synthetic data | **0.63** ± 0.02 | 0.51 ± 0.02 | 0.51 ± 0.04 |
+
+<!-- BENCH:END -->
 
 ## References
 
@@ -66,7 +93,12 @@ auc_cd = time_dependent_auc(
 
 ## Requirements
 
-Having `R` compiler installed
+Since v0.1.0 the package ships a native Rust backend (via
+[maturin](https://www.maturin.rs/) and [PyO3](https://pyo3.rs)). No R
+toolchain is required. Prebuilt Linux x86_64 wheels target Python 3.9+
+via the stable `abi3` ABI.
+
+Installing from source requires a Rust stable toolchain; see `build.sh`.
 
 ## Project
 

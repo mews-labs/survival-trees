@@ -44,17 +44,14 @@ def execution_time(method):
                                    interval=1e-7)
         te = time.time()
 
-        msg = "[" + method.__name__ + "] execution time :"
-        msg += "-" * (40 - len(msg)) + "  "
-        msg += str(datetime.timedelta(milliseconds=(te - ts) * 1000))
-        msg += "  " + f'Memory {int(max(mem) - min(mem))}' + " MiB"
-        if hasattr(args[0], "active_execution_time"):
-            if not args[0].active_execution_time:
-                return result
-            else:
-                print_(msg, color="TIME")
-        else:
-            print_(msg, color="TIME")
+        if not getattr(args[0], "active_execution_time", True):
+            return result
+
+        head = f"[{method.__name__}] execution time :"
+        head += "-" * (40 - len(head)) + "  "
+        elapsed = datetime.timedelta(milliseconds=(te - ts) * 1000)
+        mem_mib = int(max(mem) - min(mem))
+        print_(f"{head}{elapsed}  Memory {mem_mib} MiB", color="TIME")
         return result
 
     return timed
@@ -78,17 +75,13 @@ def silence_stdout():
 
 
 def deprecated(func):
-    """This is a decorator which can be used to mark functions
-    as deprecated. It will result in a warning being emitted
-    when the function is used."""
-
     @wraps(func)
     def new_func(*args, **kwargs):
-        warnings.simplefilter('always', DeprecationWarning)  # turn off filter
-        warnings.warn("Call to deprecated function {}.".format(func.__name__),
+        warnings.simplefilter('always', DeprecationWarning)
+        warnings.warn(f"Call to deprecated function {func.__name__}.",
                       category=DeprecationWarning,
                       stacklevel=2)
-        warnings.simplefilter('default', DeprecationWarning)  # reset filter
+        warnings.simplefilter('default', DeprecationWarning)
         return func(*args, **kwargs)
 
     return new_func

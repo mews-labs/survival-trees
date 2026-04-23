@@ -14,9 +14,8 @@ import os
 import sys
 
 sys.path.insert(0, os.path.abspath('.'))
-sys.path.insert(0, os.path.abspath('../'))
-sys.path.insert(0, os.path.abspath('../../'))
-sys.path.insert(0, os.path.abspath('../../survival_trees'))
+sys.path.insert(0, os.path.abspath('../../src'))
+sys.path.insert(0, os.path.abspath('../../src/survival_trees'))
 
 # -- Project information -----------------------------------------------------
 
@@ -25,7 +24,7 @@ copyright = '2022, Vincent Laurent'
 author = 'Vincent Laurent'
 
 # The full version, including alpha/beta/rc tags
-release = '0.0.2'
+release = '0.1.0'
 
 
 # -- General configuration ---------------------------------------------------
@@ -59,4 +58,4 @@ html_static_path = ['_static']
 html_css_files = [
     '_static/theme.css',
 ]
-# sphinx-apidoc -o doc/source/ survival/ "**/test**" -f -M
+# sphinx-apidoc -o docs/source/ src/survival_trees/ "**/test**" -f -M

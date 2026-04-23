@@ -9,7 +9,6 @@ import pandas as pd
 from lifelines import utils
 from sklearn import metrics as sk_metrics
 
-
 # life lines signature
 # event_times, predicted_scores, event_observed
 
@@ -18,9 +17,10 @@ def __validate(matrix: pd.DataFrame, vector: iter):
     shape_m = matrix.shape
     shape_v = len(vector)
     if shape_m[0] != shape_v:
-        raise ValueError(f"Shape of input matrix must be n_observation ({shape_m[0]}) x "
-                         f"number of timestamp ({shape_m[1]}) \n"
-                         f"Number of observation in vector ({shape_v})")
+        raise ValueError(
+            f"Shape of input matrix must be n_observation ({shape_m[0]}) x "
+            f"number of timestamp ({shape_m[1]}) \n"
+            f"Number of observation in vector ({shape_v})")
 
 
 def __validate_decorator(function):
@@ -30,9 +30,8 @@ def __validate_decorator(function):
                 censoring_time: iter, *args, **kwargs):
         __validate(temporal_score, event_observed)
         __validate(temporal_score, censoring_time)
-        result = function(temporal_score, event_observed,
+        return function(temporal_score, event_observed,
                           censoring_time, *args, **kwargs)
-        return result
 
     return wrapper
 
@@ -96,16 +95,19 @@ def time_dependent_helper(
 
     for t in temporal_score.columns:
         try:
-            y_true = np.array(outcome(t))
-            y_score = np.array(marker(t))
+            y_true = np.asarray(outcome(t))
+            y_score = np.asarray(marker(t), dtype=float)
 
-            nan_ = np.isnan(y_true)
-            nan_ |= np.isnan(y_score)
+            nan_ = np.isnan(y_true.astype(float)) | np.isnan(y_score)
+            y_true = y_true[~nan_]
+            y_score = y_score[~nan_]
 
-            result[t] = function(
-                y_true=y_true[~nan_],
-                y_score=y_score[~nan_]
-            )
+            # sklearn ≥ 1.3 returns NaN instead of raising when y_true
+            # has a single class — skip to keep the pre-1.3 behaviour.
+            if np.unique(y_true).size < 2:
+                continue
+
+            result[t] = function(y_true=y_true, y_score=y_score)
         except ValueError:
             pass
     return result

@@ -1,12 +1,18 @@
 
 
 if __name__ == '__main__':
-    from lifelines import (WeibullFitter, ExponentialFitter,
-                           LogNormalFitter, LogLogisticFitter, NelsonAalenFitter,
-                           PiecewiseExponentialFitter, GeneralizedGammaFitter, SplineFitter)
-
-    from lifelines.datasets import load_waltons
     import matplotlib.pyplot as plt
+    from lifelines import (
+        ExponentialFitter,
+        GeneralizedGammaFitter,
+        LogLogisticFitter,
+        LogNormalFitter,
+        NelsonAalenFitter,
+        PiecewiseExponentialFitter,
+        SplineFitter,
+        WeibullFitter,
+    )
+    from lifelines.datasets import load_waltons
     data = load_waltons()
 
     fig, axes = plt.subplots(3, 3, figsize=(10, 7.5))
@@ -19,7 +25,8 @@ if __name__ == '__main__':
     lnf = LogNormalFitter().fit(T, E, label='LogNormalFitter')
     naf = NelsonAalenFitter().fit(T, E, label='NelsonAalenFitter')
     llf = LogLogisticFitter().fit(T, E, label='LogLogisticFitter')
-    pwf = PiecewiseExponentialFitter([40, 60]).fit(T, E, label='PiecewiseExponentialFitter')
+    pwf = PiecewiseExponentialFitter([40, 60]).fit(
+        T, E, label='PiecewiseExponentialFitter')
     gg = GeneralizedGammaFitter().fit(T, E, label='GeneralizedGammaFitter')
     spf = SplineFitter([6, 20, 40, 75]).fit(T, E, label='SplineFitter')
 

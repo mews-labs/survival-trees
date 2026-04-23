@@ -15,7 +15,7 @@ def get_data():
     y_cols = ["start_year", "age", "observed"]
     rng = np.random.default_rng(0)
     X = pd.DataFrame(
-        dict(x1=rng.uniform(size=n), x2=rng.uniform(size=n)),
+        {"x1": rng.uniform(size=n), "x2": rng.uniform(size=n)},
         index=range(n),
     )
     y = pd.DataFrame(columns=y_cols, index=X.index)
@@ -87,16 +87,6 @@ def test_ltrc_trees_predict_curves(get_data):
     assert indexes.index.equals(x_test.index)
 
 
-# Post-Phase-2 note: the legacy concordance-based thresholds below (> 0.5,
-# > 0.6) were calibrated against the R/LTRCART backend on unseeded random
-# data and were therefore flaky. Phase 2 replaces the splitter (log-rank
-# LTRC in Rust vs. rpart deviance in R), which is an explicit simplification
-# allowed by the design spec under constraint 3 (free functional
-# equivalence). We keep the c_index assertion as a weak sanity check
-# (predictions are informative in SOME direction) and supplement it with
-# structural checks that the output is a valid survival matrix.
-
-
 def _assert_survival_matrix(df):
     arr = df.to_numpy(dtype=float)
     assert np.isfinite(arr).all(), "non-finite survival value"
@@ -148,6 +138,70 @@ def test_rf_ltrc_fast(get_data):
     test = test.ffill()
     c_mean = _mean_c_index(test, y_test["observed"])
     assert abs(c_mean - 0.5) > 0.1, f"forest predictions not informative; c={c_mean}"
+
+
+def _eval_survival_at(pred: pd.DataFrame, t: float) -> np.ndarray:
+    cols = np.asarray(pred.columns, dtype=float)
+    idx = np.searchsorted(cols, t, side="right") - 1
+    idx = max(idx, 0)
+    return pred.iloc[:, idx].to_numpy(dtype=float)
+
+
+def _make_two_group_data(n: int, seed: int, lam_a: float, lam_b: float):
+    rng = np.random.default_rng(seed)
+    x1 = rng.uniform(size=n)
+    x2 = rng.uniform(size=n)
+    lam = np.where(x1 < 0.5, lam_a, lam_b)
+    t_event = rng.exponential(scale=1.0 / lam)
+    # light independent censoring → KM unbiased, satisfies 2-unique-values validator
+    t_cens = rng.exponential(scale=10.0, size=n)
+    time = np.minimum(t_event, t_cens)
+    event = (t_event <= t_cens).astype(int)
+    X = pd.DataFrame({"x1": x1, "x2": x2})
+    y = pd.DataFrame({"start": np.zeros(n), "age": time, "observed": event})
+    return X, y
+
+
+def test_two_group_exponential_recovery():
+    """Two groups with known exponential S(t); KM leaves must recover it."""
+    lam_a, lam_b = 0.5, 2.0
+    X, y = _make_two_group_data(n=4000, seed=42, lam_a=lam_a, lam_b=lam_b)
+
+    est = LTRCTrees(max_depth=1, min_samples_leaf=100, min_impurity_decrease=0.0)
+    est.fit(X, y)
+
+    X_test = pd.DataFrame({"x1": [0.25, 0.75], "x2": [0.5, 0.5]})
+    pred = est.predict(X_test)
+
+    for t in (0.5, 1.0, 1.5, 2.0):
+        s_hat = _eval_survival_at(pred, t)
+        expected = np.array([np.exp(-lam_a * t), np.exp(-lam_b * t)])
+        assert np.allclose(s_hat, expected, atol=0.02), (
+            f"t={t}: got {s_hat}, expected {expected}")
+
+
+def test_two_group_exponential_recovery_forest():
+    """Same ground truth, recovered by a small forest via aggregated predict."""
+    lam_a, lam_b = 0.5, 2.0
+    X, y = _make_two_group_data(n=4000, seed=7, lam_a=lam_a, lam_b=lam_b)
+
+    est = RandomForestLTRC(
+        n_estimators=20,
+        max_features=2,
+        min_samples_leaf=100,
+        min_impurity_decrease=0.0,
+        random_state=0,
+    )
+    est.fit(X, y)
+
+    X_test = pd.DataFrame({"x1": [0.25, 0.75], "x2": [0.5, 0.5]})
+    pred = est.predict(X_test)
+
+    for t in (0.5, 1.0, 1.5, 2.0):
+        s_hat = _eval_survival_at(pred, t)
+        expected = np.array([np.exp(-lam_a * t), np.exp(-lam_b * t)])
+        assert np.allclose(s_hat, expected, atol=0.05), (
+            f"t={t}: got {s_hat}, expected {expected}")
 
 
 def test_rf_ltrc_fast_max_features(get_data):

@@ -1,33 +1,17 @@
 import numpy as np
 import pandas as pd
 
+_DEFAULT_DATE_INITIAL = pd.to_datetime("2000")
+_DEFAULT_DATE_FINAL = pd.to_datetime("2050")
+
 
 def shift_origin(
         data: pd.DataFrame, starting_dates: pd.Series, period,
-        date_final=pd.to_datetime("2050"),
-        date_initial=pd.to_datetime("2000"), dtypes: str = "float16"
-
+        date_final=_DEFAULT_DATE_FINAL,
+        date_initial=_DEFAULT_DATE_INITIAL, dtypes: str = "float16",
 ):
-    """
-    Given a temporal dataframe, this function shift
-    the origin
-
-    Parameters
-    ----------
-
-    data : pandas DataFrame
-         input data. Note that columns must be datetime
-    starting_dates: datetime Series
-        must be the same length as data.shape[0]
-    period: timedelta
-        Defining period to resample timestamp
-    date_final: datetime
-        Defining last date of the date range
-    date_initial: datetime
-        Defining first date of the date range
-    dtypes: float
-        Datatype to control memory allocation
-    """
+    """Shift the time origin of a temporal DataFrame whose columns are
+    datetime, so each row is re-aligned on its own ``starting_dates``."""
     range_ = np.arange(
         starting_dates.min(),
         date_final + period,

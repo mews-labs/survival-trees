@@ -1,69 +1,46 @@
-"""Rust-backed implementations of LTRCTrees and RandomForestLTRC.
-
-This module is internal and not re-exported via ``__init__.py`` in Phase 1.
-It mirrors the public signatures of ``_base.LTRCTrees`` and
-``_base.RandomForestLTRC`` so that Phase 2 can simply swap the public
-classes to these implementations.
-"""
-
-from typing import Optional, Union
+from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, ClassifierMixin
 
 from . import _rust
-from ._common import forest_post_processing, validate_y
+from ._common import validate_y
 
 
 def _extract_xy(X: pd.DataFrame, y: pd.DataFrame):
-    """Return arrays (x, entry, time, event) with the dtypes expected by the
-    Rust backend, given the public ``_validate_y`` contract:
-    y columns = [truncation, age_of_death, death]."""
     entry = np.ascontiguousarray(y.iloc[:, 0].to_numpy(dtype=np.float64))
     time = np.ascontiguousarray(y.iloc[:, 1].to_numpy(dtype=np.float64))
     event_raw = y.iloc[:, 2]
     if event_raw.dtype != bool:
-        values = np.unique(event_raw)
-        if set(np.asarray(values).tolist()) <= {0, 1, True, False}:
-            event = np.ascontiguousarray(event_raw.astype(bool).to_numpy())
-        else:
+        if not set(np.unique(event_raw).tolist()) <= {0, 1}:
             raise ValueError("event column must be boolean or 0/1")
-    else:
-        event = np.ascontiguousarray(event_raw.to_numpy(dtype=bool))
+    event = np.ascontiguousarray(event_raw.to_numpy(dtype=bool))
     x = np.ascontiguousarray(X.to_numpy(dtype=np.float64))
     return x, entry, time, event
 
 
-def _build_control(tree: "_RustBackedLTRCTrees") -> dict:
+def _build_control(tree: _RustBackedLTRCTrees) -> dict:
     return {
         "max_depth": tree.max_depth,
-        "min_samples_leaf": (1 if tree.min_samples_leaf is None
-                             else int(tree.min_samples_leaf)),
-        "min_samples_split": (2 if tree.min_samples_split is None
-                              else int(tree.min_samples_split)),
-        "min_impurity_decrease": (0.0 if tree.min_impurity_decrease is None
-                                  else float(tree.min_impurity_decrease)),
-        "criterion": getattr(tree, "criterion", "log-rank"),
-        "pipeline": getattr(tree, "pipeline", "aalen"),
-        "splitter": getattr(tree, "splitter", "best"),
+        "min_samples_leaf": tree.min_samples_leaf or 1,
+        "min_samples_split": tree.min_samples_split or 2,
+        "min_impurity_decrease": tree.min_impurity_decrease or 0.0,
+        "criterion": tree.criterion,
+        "pipeline": tree.pipeline,
+        "splitter": tree.splitter,
     }
 
 
-def _assemble_dense_curves(curves_mat: np.ndarray,
-                           leaf_ids: np.ndarray,
-                           times: np.ndarray,
-                           index: pd.Index) -> pd.DataFrame:
-    """curves_mat: (n_leaves, n_times); leaf_ids: (n_samples,).
-    Returns DataFrame of shape (n_samples, n_times) indexed like `index`."""
+def _assemble_dense_curves(curves_mat: np.ndarray, leaf_ids: np.ndarray,
+                           times: np.ndarray, index: pd.Index) -> pd.DataFrame:
     if times.size == 0:
         return pd.DataFrame(index=index, dtype="float32")
-    rows = curves_mat[leaf_ids, :]
-    return pd.DataFrame(rows, index=index, columns=times, dtype="float32")
+    return pd.DataFrame(curves_mat[leaf_ids, :], index=index,
+                        columns=times, dtype="float32")
 
 
 class _RustBackedLTRCTrees(BaseEstimator, ClassifierMixin):
-    """Drop-in Rust-backed replacement for ``_base.LTRCTrees``."""
 
     def __init__(
         self,
@@ -127,7 +104,6 @@ class _RustBackedLTRCTrees(BaseEstimator, ClassifierMixin):
 
 
 class _RustBackedForest(ClassifierMixin):
-    """Drop-in Rust-backed replacement for ``_base.RandomForestLTRC``."""
 
     def __init__(
         self,
@@ -200,7 +176,7 @@ class _RustBackedForest(ClassifierMixin):
         if self.max_features is None:
             return n_features
         if isinstance(self.max_features, float):
-            return max(2, min(n_features, int(round(self.max_features * n_features))))
+            return max(2, min(n_features, round(self.max_features * n_features)))
         if self.max_features == "auto":
             return max(2, n_features // 3)
         return max(2, min(n_features, int(self.max_features)))
@@ -268,7 +244,7 @@ class _RustBackedForest(ClassifierMixin):
         self.fast_predict_(X)
         if return_type == "dense":
             node_index = self.nodes_["curve_index"].to_numpy()
-            result = self.km_estimates_.iloc[node_index]
+            result = self.km_estimates_.iloc[node_index].copy()
             result.index = X.index
             return result
         raise ValueError(f"return_type : {return_type} is not implemented yet")

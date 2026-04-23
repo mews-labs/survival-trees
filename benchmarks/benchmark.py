@@ -1,15 +1,19 @@
 import matplotlib.pyplot as plot
 import numpy as np
 import pandas as pd
-import seaborn as sns
+import synthetic
 from lifelines import datasets
 from lifelines.fitters import coxph_fitter, log_logistic_aft_fitter
 from lifelines.plotting import plot_lifetimes
 from sklearn.model_selection import train_test_split
 
-from survival_trees.benchmark import synthetic
-from survival_trees import LTRCTrees, RandomForestLTRCFitter, RandomForestLTRC, LTRCTreesFitter
-from survival_trees import plotting
+from survival_trees import (
+    LTRCTrees,
+    LTRCTreesFitter,
+    RandomForestLTRC,
+    RandomForestLTRCFitter,
+    plotting,
+)
 from survival_trees.metric import concordance_index as harrell_concordance
 from survival_trees.metric import time_dependent_auc
 
@@ -54,7 +58,7 @@ def load_datasets():
     y = data[["entry_date", "duration", "observed"]]
     X = data.drop(columns=y.columns.tolist())
     X = X.select_dtypes(include=np.number)
-    datasets_dict["Dictatorship \& Democracy"] = X, y
+    datasets_dict[r"Dictatorship \& Democracy"] = X, y
     # ==========================================================================
     data = datasets.load_rossi()
     data["entry_date"] = 0
@@ -93,7 +97,7 @@ def benchmark(n_exp=2):
         for k, (X, y) in all_datasets.items():
             x_train, x_test, y_train, y_test = train_test_split(
                 X, y, train_size=0.7, random_state=j)
-            for key in models.keys():
+            for key in models:
                 try:
                     models[key].fit(
                         pd.concat((x_train, y_train), axis=1).dropna(),
@@ -122,7 +126,7 @@ def benchmark(n_exp=2):
 
     def _concat(d):
         out = pd.DataFrame()
-        for run in d.keys():
+        for run in d:
             d[run]["num_expe"] = run
             out = pd.concat((d[run].astype(float), out), axis=0)
         out.index.name = "dataset"
@@ -130,8 +134,8 @@ def benchmark(n_exp=2):
 
     auc_all = _concat(auc_res)
     cidx_all = _concat(cidx_res)
-    auc_all.to_csv("survival_trees/benchmark/benchmark_data_v2.csv")
-    cidx_all.to_csv("survival_trees/benchmark/benchmark_cindex_v2.csv")
+    auc_all.to_csv("benchmarks/benchmark_data_v2.csv")
+    cidx_all.to_csv("benchmarks/benchmark_cindex_v2.csv")
 
     mean_ = auc_all.reset_index().groupby("dataset").mean().drop(columns=["num_expe"])
     std_ = auc_all.reset_index().groupby("dataset").std().drop(columns=["num_expe"])
@@ -152,8 +156,8 @@ def test_larynx():
     for i, model in enumerate(models):
         model.fit(x_train, y_train)
         test = model.predict(x_test).astype(float)
-        c_index = concordance_index(
-            test, death=y_test["death"],
+        c_index = harrell_concordance(
+            test, event_observed=y_test["death"],
             censoring_time=y_test["time"])
         c_index.plot()
 
@@ -208,15 +212,16 @@ if __name__ == '__main__':
     # mean_, _ = benchmark(n_exp=20)
     # mean_.to_csv("benchmark/benchmark.csv")
 
-    import textwrap
 
     def _as_markdown(csv_path, md_path, caption):
         df = pd.read_csv(csv_path, index_col="dataset")
         grouped = df.reset_index().groupby("dataset")
         m = grouped.mean().drop(columns=["num_expe"])
         s = grouped.std().drop(columns=["num_expe"])
-        m = m.loc[data_names]; s = s.loc[data_names]
-        m.index = [e.replace("\&", "&") for e in m.index]; s.index = m.index
+        m = m.loc[data_names]
+        s = s.loc[data_names]
+        m.index = [e.replace(r"\&", "&") for e in m.index]
+        s.index = m.index
         m.columns = [e.replace("trees", "cart") for e in m.columns]
         s.columns = m.columns
         drop = [c for c in m.columns if "cart" in c]
@@ -264,10 +269,10 @@ if __name__ == '__main__':
         with open(readme_path, "w") as fh:
             fh.write(new)
 
-    _as_markdown("survival_trees/benchmark/benchmark_data_v2.csv",
+    _as_markdown("benchmarks/benchmark_data_v2.csv",
                  "./public/benchmark.md",
                  "Time-dependent AUC (Harrell, mean ± std over 5 seeds)")
-    _as_markdown("survival_trees/benchmark/benchmark_cindex_v2.csv",
+    _as_markdown("benchmarks/benchmark_cindex_v2.csv",
                  "./public/benchmark_cindex.md",
                  "Harrell c-index (mean ± std over 5 seeds)")
 
@@ -279,4 +284,5 @@ if __name__ == '__main__':
     for k, data_ in datasets_dict.items():
         X, y = data_
         y.columns = ["entry_date", "time", "death"]
-        pd.concat((X, y), axis=1).iloc[:600].to_csv(f"survival_trees/benchmark/data/{k}.txt", index=False)
+        pd.concat((X, y), axis=1).iloc[:600].to_csv(
+            f"benchmarks/data/{k}.txt", index=False)

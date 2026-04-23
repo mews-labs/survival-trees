@@ -1,18 +1,22 @@
 use ndarray::Array2;
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
 
-use crate::km::kaplan_meier_ltrc;
+use crate::km::{kaplan_meier_ltrc, nelson_aalen_survival_ltrc};
 use crate::split::find_best_split;
-use crate::types::{Control, Dataset, Node, Tree};
+use crate::types::{Control, Dataset, Direction, Node, Pipeline, Tree};
 
-pub fn fit_tree(ds: &Dataset, control: &Control) -> Tree {
+pub fn fit_tree(ds: &Dataset, control: &Control, seed: u64) -> Tree {
     let n_features = ds.n_features();
     let indices: Vec<usize> = (0..ds.n_samples()).collect();
     let mut leaf_counter: usize = 0;
-    let root = build_node(ds, &indices, control, 0, &mut leaf_counter);
+    let mut rng = ChaCha8Rng::seed_from_u64(seed);
+    let root = build_node(ds, &indices, control, 0, &mut leaf_counter, &mut rng);
     Tree {
         root,
         n_leaves: leaf_counter,
         n_features,
+        pipeline: control.pipeline,
     }
 }
 
@@ -22,22 +26,29 @@ fn build_node(
     control: &Control,
     depth: usize,
     leaf_counter: &mut usize,
+    rng: &mut ChaCha8Rng,
 ) -> Node {
     let at_depth_limit = control.max_depth.map_or(false, |d| depth >= d);
     let too_few = indices.len() < control.min_samples_split.max(2);
     let split = if at_depth_limit || too_few {
         None
     } else {
-        find_best_split(ds, indices, control)
+        find_best_split(ds, indices, control, rng)
     };
 
     match split {
-        None => make_leaf(ds, indices, leaf_counter),
+        None => make_leaf(ds, indices, leaf_counter, control.pipeline),
         Some(s) => {
             let mut left_idx = Vec::new();
             let mut right_idx = Vec::new();
             for &i in indices {
-                if ds.x[[i, s.feature]] <= s.threshold {
+                let v = ds.x[[i, s.feature]];
+                let go_left = if v.is_nan() {
+                    s.default_direction == Direction::Left
+                } else {
+                    v <= s.threshold
+                };
+                if go_left {
                     left_idx.push(i);
                 } else {
                     right_idx.push(i);
@@ -46,13 +57,14 @@ fn build_node(
             if left_idx.len() < control.min_samples_leaf
                 || right_idx.len() < control.min_samples_leaf
             {
-                return make_leaf(ds, indices, leaf_counter);
+                return make_leaf(ds, indices, leaf_counter, control.pipeline);
             }
-            let left = Box::new(build_node(ds, &left_idx, control, depth + 1, leaf_counter));
-            let right = Box::new(build_node(ds, &right_idx, control, depth + 1, leaf_counter));
+            let left = Box::new(build_node(ds, &left_idx, control, depth + 1, leaf_counter, rng));
+            let right = Box::new(build_node(ds, &right_idx, control, depth + 1, leaf_counter, rng));
             Node::Internal {
                 feature: s.feature,
                 threshold: s.threshold,
+                default_direction: s.default_direction,
                 left,
                 right,
                 n_samples: indices.len(),
@@ -62,9 +74,13 @@ fn build_node(
     }
 }
 
-fn make_leaf(ds: &Dataset, indices: &[usize], leaf_counter: &mut usize) -> Node {
+fn make_leaf(ds: &Dataset, indices: &[usize], leaf_counter: &mut usize,
+             pipeline: Pipeline) -> Node {
     let samples: Vec<_> = indices.iter().map(|&i| ds.samples[i]).collect();
-    let km = kaplan_meier_ltrc(&samples);
+    let km = match pipeline {
+        Pipeline::Km => kaplan_meier_ltrc(&samples),
+        Pipeline::Aalen => nelson_aalen_survival_ltrc(&samples),
+    };
     let leaf_id = *leaf_counter;
     *leaf_counter += 1;
     Node::Leaf { leaf_id, km }
@@ -80,11 +96,18 @@ pub fn predict_leaf_ids(tree: &Tree, x: &Array2<f64>) -> Vec<usize> {
                     Node::Internal {
                         feature,
                         threshold,
+                        default_direction,
                         left,
                         right,
                         ..
                     } => {
-                        node = if x[[i, *feature]] <= *threshold { left } else { right };
+                        let v = x[[i, *feature]];
+                        let go_left = if v.is_nan() {
+                            *default_direction == Direction::Left
+                        } else {
+                            v <= *threshold
+                        };
+                        node = if go_left { left } else { right };
                     }
                 }
             }
@@ -184,8 +207,11 @@ mod tests {
             min_samples_leaf: 1,
             min_samples_split: 2,
             min_impurity_decrease: 0.0,
+            criterion: crate::types::SplitCriterion::LogRank,
+            pipeline: Pipeline::Aalen,
+            splitter: crate::types::SplitterMode::Best,
         };
-        let tree = fit_tree(&ds, &ctrl);
+        let tree = fit_tree(&ds, &ctrl, 0);
         assert_eq!(tree.n_leaves, 2);
         let ids = predict_leaf_ids(&tree, &x);
         assert_eq!(ids[0], ids[1]);
