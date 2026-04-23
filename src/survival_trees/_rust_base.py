@@ -44,6 +44,9 @@ def _build_control(tree: "_RustBackedLTRCTrees") -> dict:
                               else int(tree.min_samples_split)),
         "min_impurity_decrease": (0.0 if tree.min_impurity_decrease is None
                                   else float(tree.min_impurity_decrease)),
+        "criterion": getattr(tree, "criterion", "log-rank"),
+        "pipeline": getattr(tree, "pipeline", "aalen"),
+        "splitter": getattr(tree, "splitter", "best"),
     }
 
 
@@ -70,6 +73,10 @@ class _RustBackedLTRCTrees(BaseEstimator, ClassifierMixin):
         interpolate_prediction: bool = True,
         min_impurity_decrease: Optional[float] = None,
         min_samples_split: Optional[int] = None,
+        criterion: str = "log-rank",
+        pipeline: str = "aalen",
+        splitter: str = "best",
+        random_state: Optional[int] = None,
     ):
         self.max_depth = max_depth
         self.min_samples_leaf = min_samples_leaf
@@ -77,12 +84,17 @@ class _RustBackedLTRCTrees(BaseEstimator, ClassifierMixin):
         self.interpolate_prediction = interpolate_prediction
         self.min_impurity_decrease = min_impurity_decrease
         self.min_samples_split = min_samples_split
+        self.criterion = criterion
+        self.pipeline = pipeline
+        self.splitter = splitter
+        self.random_state = random_state
 
     def fit(self, X: pd.DataFrame, y: pd.DataFrame):
         validate_y(y)
         x, entry, time, event = _extract_xy(X, y)
         self._inner = _rust._RustLtrcTree()
-        self._inner.fit(x, entry, time, event, _build_control(self))
+        seed = 0 if self.random_state is None else int(self.random_state)
+        self._inner.fit(x, entry, time, event, _build_control(self), seed)
         self._feature_names_ = list(X.columns)
         importances = np.asarray(self._inner.feature_importances(), dtype=float)
         self.feature_importances_ = importances.tolist()
@@ -130,6 +142,10 @@ class _RustBackedForest(ClassifierMixin):
         base_estimator: Optional[_RustBackedLTRCTrees] = None,
         random_state: Optional[int] = None,
         n_jobs: Optional[int] = None,
+        time_grid: Optional[Union[int, np.ndarray]] = None,
+        criterion: str = "log-rank",
+        pipeline: str = "aalen",
+        splitter: str = "best",
     ):
         self.n_estimator = n_estimators
         self.n_estimators = n_estimators
@@ -142,6 +158,10 @@ class _RustBackedForest(ClassifierMixin):
         self.min_samples_split = min_samples_split
         self.random_state = random_state
         self.n_jobs = n_jobs
+        self.time_grid = time_grid
+        self.criterion = criterion
+        self.pipeline = pipeline
+        self.splitter = splitter
         if base_estimator is None:
             self.base_estimator_ = _RustBackedLTRCTrees(
                 interpolate_prediction=False,
@@ -149,9 +169,32 @@ class _RustBackedForest(ClassifierMixin):
                 min_samples_leaf=self.min_samples_leaf,
                 min_impurity_decrease=self.min_impurity_decrease,
                 min_samples_split=self.min_samples_split,
+                criterion=self.criterion,
+                pipeline=self.pipeline,
+                splitter=self.splitter,
             )
         else:
             self.base_estimator_ = base_estimator
+
+    def _resolve_time_grid(self, y: pd.DataFrame) -> Optional[np.ndarray]:
+        if self.time_grid is None:
+            return None
+        if isinstance(self.time_grid, (int, np.integer)):
+            n_bins = int(self.time_grid)
+            if n_bins <= 0:
+                return None
+            event_mask = y.iloc[:, 2].astype(bool).to_numpy()
+            event_times = y.iloc[:, 1].to_numpy(dtype=np.float64)[event_mask]
+            if event_times.size == 0:
+                return None
+            qs = np.linspace(0.0, 1.0, n_bins + 1)[1:]
+            return np.unique(np.quantile(event_times, qs)).astype(np.float64)
+        grid = np.asarray(self.time_grid, dtype=np.float64)
+        if grid.ndim != 1:
+            raise ValueError("time_grid array must be 1-dimensional")
+        if grid.size and np.any(np.diff(grid) < 0):
+            raise ValueError("time_grid must be sorted ascending")
+        return grid
 
     def _resolve_max_features(self, n_features: int) -> int:
         if self.max_features is None:
@@ -191,26 +234,41 @@ class _RustBackedForest(ClassifierMixin):
         importances = np.asarray(inner.feature_importances(), dtype=float)
         self.feature_importances_ = importances.tolist()
         self._feature_subsets = [list(subset) for subset in inner.feature_subsets()]
+        self._time_grid_ = self._resolve_time_grid(y)
         return self
 
     def fast_predict_(self, X: pd.DataFrame) -> None:
         x = np.ascontiguousarray(X.to_numpy(dtype=np.float64))
-        per_tree = self._inner.predict_forest(x)
-        result = {}
-        for e, (curves_mat, leaf_ids, times) in enumerate(per_tree):
-            curves_mat = np.asarray(curves_mat, dtype=np.float32)
-            leaf_ids = np.asarray(leaf_ids, dtype=np.int64)
-            times = np.asarray(times, dtype=np.float64)
-            curves_df = pd.DataFrame(curves_mat, columns=times, dtype="float32")
-            indexes = pd.Series(leaf_ids, index=X.index, dtype="int64")
-            result[e] = (curves_df, indexes)
-        self.km_estimates_, self.nodes_ = forest_post_processing(result, X)
+        grid = getattr(self, "_time_grid_", None)
+        if grid is None:
+            curves, node_index, times = self._inner.predict_aggregated(x, None)
+        else:
+            curves, node_index, times = self._inner.predict_aggregated(x, grid)
+        curves = np.asarray(curves, dtype=np.float32)
+        node_index = np.asarray(node_index, dtype=np.int64)
+        times = np.asarray(times, dtype=np.float64)
+        self.km_estimates_ = pd.DataFrame(
+            curves, columns=times, index=pd.RangeIndex(curves.shape[0]), dtype="float32"
+        )
+        self.nodes_ = pd.DataFrame(
+            {"x_index": X.index.to_numpy(), "curve_index": node_index}
+        )
 
-    def predict(self, X: pd.DataFrame, return_type: str = "dense") -> pd.DataFrame:
+    def predict(self, X: pd.DataFrame, return_type: str = "dense",
+                lazy: bool = False):
+        if lazy:
+            from ._lazy import LazyForestSurvival
+            x = np.ascontiguousarray(X.to_numpy(dtype=np.float64))
+            inner = self._inner.predict_lazy(x)
+            return LazyForestSurvival(
+                inner=inner,
+                sample_index=X.index,
+                default_grid=getattr(self, "_time_grid_", None),
+            )
         self.fast_predict_(X)
         if return_type == "dense":
-            return pd.merge(
-                self.nodes_, self.km_estimates_,
-                left_on="curve_index", right_index=True,
-            ).set_index("x_index").drop(columns=["curve_index"]).loc[X.index]
+            node_index = self.nodes_["curve_index"].to_numpy()
+            result = self.km_estimates_.iloc[node_index]
+            result.index = X.index
+            return result
         raise ValueError(f"return_type : {return_type} is not implemented yet")

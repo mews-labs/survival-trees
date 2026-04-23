@@ -10,12 +10,9 @@ from sklearn.model_selection import train_test_split
 from survival_trees.benchmark import synthetic
 from survival_trees import LTRCTrees, RandomForestLTRCFitter, RandomForestLTRC, LTRCTreesFitter
 from survival_trees import plotting
-from survival_trees.metric import concordance_index, time_dependent_auc
+from survival_trees.metric import concordance_index as harrell_concordance
+from survival_trees.metric import time_dependent_auc
 
-import rpy2
-from rpy2 import robjects
-from rpy2.robjects import pandas2ri
-from rpy2.robjects.conversion import localconverter
 plot.rc('font', family='ubuntu')
 
 
@@ -51,20 +48,6 @@ def load_datasets():
     X = data.drop(columns=y.columns.tolist())
     X = X.astype(float).select_dtypes(include=np.number)
     datasets_dict["Breast Cancer"] = X, y
-    # =========================================================================
-    robjects.r("library(survival)")
-    with localconverter(robjects.default_converter + pandas2ri.converter):
-        data = robjects.conversion.rpy2py(robjects.r("survival::flchain"))
-    data["sex"] = (data["sex"] == "F").astype(int)
-    y = pd.DataFrame(index=data.index)
-    data.loc[data["futime"] <= 0, "futime"] = 0.5
-    y["time"] = data["futime"]/365.25 + data["age"]
-    y["death"] = data["death"]
-    y["entry_point"] = data["age"]
-    y = y[["entry_point", "time", "death"]]
-    y['death'] = y["death"].astype(int)
-    X = data[["sex", "kappa", "lambda", "creatinine", "mgus"]]
-    datasets_dict["FLC chain"] = X, y
     # ==========================================================================
     data = datasets.load_dd()
     data["entry_date"] = 0
@@ -93,22 +76,24 @@ def benchmark(n_exp=2):
     all_datasets = load_datasets()
     models = {
         "ltrc-forest": RandomForestLTRCFitter(
-            n_estimators=30,
-            min_impurity_decrease=0.0000001,
-            min_samples_leaf=3,
-            max_samples=0.89),
-        "ltrc-trees": LTRCTreesFitter(min_samples_leaf=3, min_impurity_decrease=0.00000001),
+            n_estimators=300,
+            min_impurity_decrease=0.01,
+            min_samples_leaf=5,
+            max_samples=0.8),
+        "ltrc-trees": LTRCTreesFitter(min_samples_leaf=5,
+                                      min_impurity_decrease=0.01),
         "cox-semi-parametric": coxph_fitter.SemiParametricPHFitter(penalizer=0.1),
         "aft-log-logistic": log_logistic_aft_fitter.LogLogisticAFTFitter(penalizer=0.1),
     }
-    results = {}
+    auc_res = {}
+    cidx_res = {}
     for j in range(n_exp):
-        results[j] = pd.DataFrame(index=all_datasets.keys(), columns=models.keys())
+        auc_res[j] = pd.DataFrame(index=all_datasets.keys(), columns=models.keys())
+        cidx_res[j] = pd.DataFrame(index=all_datasets.keys(), columns=models.keys())
         for k, (X, y) in all_datasets.items():
             x_train, x_test, y_train, y_test = train_test_split(
-                X, y, train_size=0.7)
-            for i, key in enumerate(models.keys()):
-                pass
+                X, y, train_size=0.7, random_state=j)
+            for key in models.keys():
                 try:
                     models[key].fit(
                         pd.concat((x_train, y_train), axis=1).dropna(),
@@ -116,38 +101,41 @@ def benchmark(n_exp=2):
                         duration_col=y_train.columns[1],
                         event_col=y_train.columns[2]
                     )
-                    test = - np.log(models[key].predict_cumulative_hazard(
-                        x_test).astype(float)).T
-                    test = test.dropna()
-                    c_index = time_dependent_auc(
-                        - test, event_observed=y_test.loc[test.index].iloc[:, 2],
-                        censoring_time=y_test.loc[test.index].iloc[:, 1])
-                    results[j].loc[k, key] = np.nanmean(c_index)
+                    # Risk marker = 1 - exp(-Λ) = 1 - S ∈ [0, 1]. Monotone
+                    # in Λ → invariant for AUC, finite everywhere.
+                    ch = models[key].predict_cumulative_hazard(x_test).astype(float).T
+                    risk = (1.0 - np.exp(-ch)).dropna()
+                    event_col = y_test.loc[risk.index].iloc[:, 2]
+                    time_col = y_test.loc[risk.index].iloc[:, 1]
+
+                    auc = time_dependent_auc(risk, event_observed=event_col,
+                                             censoring_time=time_col)
+                    auc_res[j].loc[k, key] = np.nanmean(auc)
+
+                    # Harrell c-index uses S(t|X) = exp(-Λ) as survival score.
+                    surv = np.exp(-ch).loc[risk.index]
+                    ci = harrell_concordance(surv, event_observed=event_col,
+                                             censoring_time=time_col)
+                    cidx_res[j].loc[k, key] = np.nanmean(ci)
                 except Exception:
                     pass
-    all_res = pd.DataFrame()
-    for res in results.keys():
-        results[res]["num_expe"] = res
-        all_res = pd.concat((results[res].astype(float), all_res), axis=0)
-    all_res.index.name = "dataset"
-    all_res.to_csv("benchmark/benchmark_data.csv")
-    mean_ = all_res.reset_index().groupby("dataset").mean().drop(columns=["num_expe"])
-    std_ = all_res.reset_index().groupby("dataset").std().drop(columns=["num_expe"])
+
+    def _concat(d):
+        out = pd.DataFrame()
+        for run in d.keys():
+            d[run]["num_expe"] = run
+            out = pd.concat((d[run].astype(float), out), axis=0)
+        out.index.name = "dataset"
+        return out
+
+    auc_all = _concat(auc_res)
+    cidx_all = _concat(cidx_res)
+    auc_all.to_csv("survival_trees/benchmark/benchmark_data_v2.csv")
+    cidx_all.to_csv("survival_trees/benchmark/benchmark_cindex_v2.csv")
+
+    mean_ = auc_all.reset_index().groupby("dataset").mean().drop(columns=["num_expe"])
+    std_ = auc_all.reset_index().groupby("dataset").std().drop(columns=["num_expe"])
     return mean_, std_
-
-def test_flc_chain():
-    X, y = load_datasets()["FLC chain"]
-    model = RandomForestLTRC(max_features=4, n_estimators=30,
-                             min_samples_leaf=1,
-                             )
-    import time
-    tic = time.time()
-    model.fit(X, y)
-    toc = time.time()
-    print(toc - tic)
-
-    model.predict(X)
-
 
 def test_larynx():
     data = datasets.load_larynx()
@@ -220,33 +208,72 @@ if __name__ == '__main__':
     # mean_, _ = benchmark(n_exp=20)
     # mean_.to_csv("benchmark/benchmark.csv")
 
-    all_res = pd.read_csv("survival_trees/benchmark/benchmark_data.csv", index_col="dataset")
-    mean_ = all_res.reset_index().groupby("dataset").mean().drop(columns=["num_expe"])
-    std_ = all_res.reset_index().groupby("dataset").std().drop(columns=["num_expe"])
-
-    mean_ = mean_.loc[data_names]
-    mean_.index = [e.replace("\&", "&") for e in mean_.index]
-    mean_.columns = [e.replace("trees", "cart") for e in mean_.columns]
-
-
-    f, ax = plot.subplots(figsize=(4.6, 2.6), dpi=300)
-    sns.heatmap(mean_.astype(float), annot=True, linewidths=2, ax=ax,
-                vmin=0.5,
-                # vmax=0.9,
-                cmap="rocket_r"
-                )
-    plot.xticks(rotation=0)
     import textwrap
 
-    f = lambda x: textwrap.fill(x.get_text(), 12)
-    ax.set_yticklabels(map(f, ax.get_yticklabels()))
+    def _as_markdown(csv_path, md_path, caption):
+        df = pd.read_csv(csv_path, index_col="dataset")
+        grouped = df.reset_index().groupby("dataset")
+        m = grouped.mean().drop(columns=["num_expe"])
+        s = grouped.std().drop(columns=["num_expe"])
+        m = m.loc[data_names]; s = s.loc[data_names]
+        m.index = [e.replace("\&", "&") for e in m.index]; s.index = m.index
+        m.columns = [e.replace("trees", "cart") for e in m.columns]
+        s.columns = m.columns
+        drop = [c for c in m.columns if "cart" in c]
+        m = m.drop(columns=drop, errors="ignore")
+        s = s.drop(columns=drop, errors="ignore")
 
-    f = lambda x: textwrap.fill(x.get_text(), 15)
-    ax.set_xticklabels(map(f, ax.get_xticklabels()))
+        winners = m.astype(float).idxmax(axis=1, skipna=True)
+        cols = list(m.columns)
 
-    plot.ylabel("")
-    plot.tight_layout()
-    plot.savefig("./public/benchmark.png")
+        lines = [f"### {caption}", ""]
+        lines.append("| dataset | " + " | ".join(cols) + " |")
+        lines.append("|" + "---|" * (len(cols) + 1))
+        for r in m.index:
+            cells = [r]
+            for c in cols:
+                mv, sv = m.loc[r, c], s.loc[r, c]
+                if pd.isna(mv):
+                    cells.append("")
+                    continue
+                bold = (winners.get(r) == c)
+                mean_s = f"**{mv:.2f}**" if bold else f"{mv:.2f}"
+                cells.append(mean_s if pd.isna(sv) else f"{mean_s} ± {sv:.2f}")
+            lines.append("| " + " | ".join(cells) + " |")
+        lines.append("")
+        with open(md_path, "w") as fh:
+            fh.write("\n".join(lines))
+
+    def _splice_into_readme(readme_path, md_paths,
+                            start="<!-- BENCH:START -->",
+                            end="<!-- BENCH:END -->"):
+        with open(readme_path) as fh:
+            src = fh.read()
+        i, j = src.find(start), src.find(end)
+        if i < 0 or j < 0 or j < i:
+            return
+        body = ["", start,
+                "<!-- auto-generated from " +
+                " + ".join(md_paths) +
+                " by benchmark.py -->", ""]
+        for p in md_paths:
+            with open(p) as fh:
+                body.append(fh.read().rstrip() + "\n")
+        body.append(end)
+        new = src[:i] + "\n".join(body) + src[j + len(end):]
+        with open(readme_path, "w") as fh:
+            fh.write(new)
+
+    _as_markdown("survival_trees/benchmark/benchmark_data_v2.csv",
+                 "./public/benchmark.md",
+                 "Time-dependent AUC (Harrell, mean ± std over 5 seeds)")
+    _as_markdown("survival_trees/benchmark/benchmark_cindex_v2.csv",
+                 "./public/benchmark_cindex.md",
+                 "Harrell c-index (mean ± std over 5 seeds)")
+
+    _splice_into_readme("./README.md",
+                        ["./public/benchmark_cindex.md",
+                         "./public/benchmark.md"])
 
 
     for k, data_ in datasets_dict.items():

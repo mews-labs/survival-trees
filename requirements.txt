@@ -1,6 +1,0 @@
-lifelines
-rpy2
-memory_profiler
-scikit-learn
-pyqt5
-plotly==5.10

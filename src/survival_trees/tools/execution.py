@@ -6,8 +6,6 @@ import warnings
 from contextlib import contextmanager
 from functools import wraps
 
-from memory_profiler import memory_usage
-
 
 class ColorsOut:
     HEADER = '\033[95m'
@@ -40,6 +38,7 @@ def print_(output, color="DEFAULT"):
 def execution_time(method):
     @wraps(method)
     def timed(*args, **kw):
+        from memory_profiler import memory_usage
         ts = time.time()
         mem, result = memory_usage((method, args, kw), retval=True, timeout=200,
                                    interval=1e-7)
