@@ -26,14 +26,16 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build + install extension
+      - name: Build wheel
         uses: PyO3/maturin-action@v1
         with:
-          command: develop
-          args: --release
+          command: build
+          args: --release --out dist
           sccache: true
-      - name: Install test deps
-        run: pip install ".[dev]"
+      - name: Install wheel + test deps
+        run: |
+          pip install dist/*.whl
+          pip install pytest lifelines
       - name: Run pytest
         run: pytest -q
 
